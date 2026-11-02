@@ -15,6 +15,7 @@ const EnvironmentSchema = z.object({
   MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
   GEMINI_API_KEY: z.string().optional().default(''),
   GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
+  GEMINI_FALLBACK_MODEL: z.string().default('gemini-3.6-flash'),
   CASE_GENERATION_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
   DEMO_MODE: z.enum(['true','false']).default('true')
 });
@@ -31,6 +32,7 @@ export const env = {
   mongoUri: parsed.data.MONGODB_URI,
   geminiKey: parsed.data.GEMINI_API_KEY,
   geminiModel: parsed.data.GEMINI_MODEL,
+  geminiFallbackModel: parsed.data.GEMINI_FALLBACK_MODEL,
   retries: parsed.data.CASE_GENERATION_MAX_RETRIES,
   demoMode: parsed.data.DEMO_MODE === 'true'
 };

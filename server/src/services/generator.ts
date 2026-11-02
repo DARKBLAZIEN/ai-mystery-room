@@ -35,10 +35,58 @@ function validateCase(data: ReturnType<typeof GeneratedCaseSchema.parse>, input:
  for (const item of data.evidence) if (Number.isNaN(Date.parse(item.timestamp))) fail('evidence contains an invalid timestamp');
  return data;
 }
-export async function generateCase(input:CreateCaseInput){
- if(!env.geminiKey){if(env.demoMode)return validateCase(GeneratedCaseSchema.parse(demo(input)),input);throw new Error('AI case generation needs a valid GEMINI_API_KEY. The built-in demo is a fixed sample and does not adapt to the submitted story.');}
- const ai=new GoogleGenAI({apiKey:env.geminiKey}); let last:unknown;
- for(let attempt=0;attempt<=env.retries;attempt++){try{const prompt=`Build a fair, solvable fictional mystery from the player's story below. The player's story is the source of truth: preserve its people, relationships, event, setting, and important details. Do not replace it with a generic gallery, hotel, or unrelated scenario. Expand gaps creatively, but do not contradict supplied details. Make the title, introduction, suspects, motive, method, timeline, and every evidence item specific to this story. The introduction should say what happened and what the investigator must solve without revealing the culprit. Return ONLY valid JSON matching: {publicCase:{title:string,introduction:string,location:string,incidentTime:string ISO,caseType:string,difficulty:string,suspects:[{id:string,name:string,age:number,occupation:string,relationship:string,background:string,publicStatement:string}]},solution:{culpritId:string,motive:string,method:string,incidentSummary:string,timeline:[{time:string,event:string,involvedSuspectIds:string[]}],requiredFacts:string[],keyEvidenceIds:string[],redHerringExplanations:string[],solutionExplanation:string},evidence:[{id:string,title:string,type:'messages'|'image'|'cctv'|'witness'|'timeline',description:string,timestamp:string ISO,associatedSuspectIds:string[],content:object,internalExplanation:string,classification:'clue'|'red-herring'|'corroboration'|'context'}]}. Make exactly ${input.suspectCount} suspects with unique short IDs. Include 6-10 evidence items, at least one of each evidence type, two independent clues supporting the culprit, and a red herring that is explicitly resolved. Keep all IDs consistent. Content shapes: messages {participants:string[],messages:[{sender:string,text:string,time:string}]}; CCTV {camera:string,frames:[{at:string,caption:string}],duration:number,offsetMinutes:number}; witness {witness:string,interviewedAt:string,statement:string}; timeline {events:[{time:string,event:string}]}; image {scene:string,label:string,observations:string[]}. ${attempt?`Previous attempt failed: ${String(last)}. Correct the issue.`:''}\nPLAYER'S STORY (follow closely):\n${input.scenario}\n\nCase type: ${input.caseType}. Difficulty: ${input.difficulty}.`;const response=await ai.models.generateContent({model:env.geminiModel,contents:prompt,config:{responseMimeType:'application/json'}});const raw=response.text||'';const parsed=JSON.parse(raw.replace(/^```json\s*/,'').replace(/```$/,''));return validateCase(GeneratedCaseSchema.parse(parsed),input);}catch(error){last=error instanceof Error?error.message:'invalid output';}}
- console.error('Gemini case generation failed after all attempts:', last);
- throw new Error(`Gemini could not generate a valid case after ${env.retries + 1} attempts. Check the server log for the provider or validation error.`);
+export class TemporaryProviderError extends Error {
+  constructor() {
+    super('The AI provider is temporarily unavailable. Please wait a minute and try again.');
+    this.name = 'TemporaryProviderError';
+  }
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const isTransientProviderFailure = (error: unknown) =>
+  /\b(408|429|500|502|503|504)\b|UNAVAILABLE|RESOURCE_EXHAUSTED|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i
+    .test(error instanceof Error ? error.message : String(error));
+
+export async function generateCase(input: CreateCaseInput) {
+  if (!env.geminiKey) {
+    if (env.demoMode) return validateCase(GeneratedCaseSchema.parse(demo(input)), input);
+    throw new Error('AI case generation needs a valid GEMINI_API_KEY. The built-in demo is a fixed sample and does not adapt to the submitted story.');
+  }
+
+  const ai = new GoogleGenAI({ apiKey: env.geminiKey });
+  const models = [...new Set([env.geminiModel, env.geminiFallbackModel])];
+  let last: unknown;
+  let lastWasTransient = false;
+
+  for (const [modelIndex, model] of models.entries()) {
+    const attempts = modelIndex === 0 ? env.retries + 1 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const repair = last ? `Previous attempt failed: ${String(last)}. Correct the issue.` : '';
+        const prompt = `Build a fair, solvable fictional mystery from the player's story below. The player's story is the source of truth: preserve its people, relationships, event, setting, and important details. Do not replace it with a generic gallery, hotel, or unrelated scenario. Expand gaps creatively, but do not contradict supplied details. Make the title, introduction, suspects, motive, method, timeline, and every evidence item specific to this story. The introduction should say what happened and what the investigator must solve without revealing the culprit. Return ONLY valid JSON matching: {publicCase:{title:string,introduction:string,location:string,incidentTime:string ISO,caseType:string,difficulty:string,suspects:[{id:string,name:string,age:number,occupation:string,relationship:string,background:string,publicStatement:string}]},solution:{culpritId:string,motive:string,method:string,incidentSummary:string,timeline:[{time:string,event:string,involvedSuspectIds:string[]}],requiredFacts:string[],keyEvidenceIds:string[],redHerringExplanations:string[],solutionExplanation:string},evidence:[{id:string,title:string,type:'messages'|'image'|'cctv'|'witness'|'timeline',description:string,timestamp:string ISO,associatedSuspectIds:string[],content:object,internalExplanation:string,classification:'clue'|'red-herring'|'corroboration'|'context'}]}. Make exactly ${input.suspectCount} suspects with unique short IDs. Include 6-10 evidence items, at least one of each evidence type, two independent clues supporting the culprit, and a red herring that is explicitly resolved. Keep all IDs consistent. Content shapes: messages {participants:string[],messages:[{sender:string,text:string,time:string}]}; CCTV {camera:string,frames:[{at:string,caption:string}],duration:number,offsetMinutes:number}; witness {witness:string,interviewedAt:string,statement:string}; timeline {events:[{time:string,event:string}]}; image {scene:string,label:string,observations:string[]}. ${repair}\nPLAYER'S STORY (follow closely):\n${input.scenario}\n\nCase type: ${input.caseType}. Difficulty: ${input.difficulty}.`;
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseMimeType: 'application/json' }
+        });
+        const raw = response.text || '';
+        const parsed = JSON.parse(raw.replace(/^```json\s*/, '').replace(/```$/, ''));
+        return validateCase(GeneratedCaseSchema.parse(parsed), input);
+      } catch (error) {
+        last = error instanceof Error ? error.message : 'invalid output';
+        lastWasTransient = isTransientProviderFailure(error);
+        if (attempt < attempts - 1) {
+          const backoffMs = Math.min(8000, 1000 * 2 ** attempt) + Math.random() * 300;
+          await delay(backoffMs);
+        }
+      }
+    }
+    if (modelIndex < models.length - 1) {
+      console.warn(`Gemini model ${model} did not produce a valid case; trying fallback model ${models[modelIndex + 1]}.`);
+    }
+  }
+
+  console.error('Gemini case generation failed after retries and fallback:', last);
+  if (lastWasTransient) throw new TemporaryProviderError();
+  throw new Error('Gemini could not produce a valid case. Check the server log for the provider or validation error.');
 }

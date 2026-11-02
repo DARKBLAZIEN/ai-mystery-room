@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CreateCaseSchema } from '@mystery-room/shared';
 import { CaseModel } from './models/Case.js';
-import { generateCase } from './services/generator.js';
+import { generateCase, TemporaryProviderError } from './services/generator.js';
 import { env } from './config/env.js';
 
 export const app = express();
@@ -96,5 +96,8 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use((error: any, _req: any, res: any, _next: any) => {
   console.error('API error:', error?.message || error);
-  res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong. Please try again.' } });
+  if (error instanceof TemporaryProviderError) {
+    return res.status(503).json({ error: { code: 'AI_PROVIDER_UNAVAILABLE', message: error.message } });
+  }
+  return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong. Please try again.' } });
 });
