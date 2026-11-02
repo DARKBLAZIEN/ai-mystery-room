@@ -15,9 +15,9 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-      styleSrcAttr: ["'unsafe-inline'"],
-      fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:']
+      'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      'style-src-attr': ["'unsafe-inline'"],
+      'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:']
     }
   }
 }));
