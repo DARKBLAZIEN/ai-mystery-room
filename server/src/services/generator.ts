@@ -42,6 +42,94 @@ export class TemporaryProviderError extends Error {
   }
 }
 
+const generatedCaseResponseSchema = {
+  type: 'object',
+  properties: {
+    publicCase: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        introduction: { type: 'string' },
+        location: { type: 'string' },
+        incidentTime: { type: 'string' },
+        caseType: { type: 'string' },
+        difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
+        suspects: {
+          type: 'array',
+          minItems: 3,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              age: { type: 'integer' },
+              occupation: { type: 'string' },
+              relationship: { type: 'string' },
+              background: { type: 'string' },
+              publicStatement: { type: 'string' }
+            },
+            required: ['id', 'name', 'age', 'occupation', 'relationship', 'background', 'publicStatement'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['title', 'introduction', 'location', 'incidentTime', 'caseType', 'difficulty', 'suspects'],
+      additionalProperties: false
+    },
+    solution: {
+      type: 'object',
+      properties: {
+        culpritId: { type: 'string' },
+        motive: { type: 'string' },
+        method: { type: 'string' },
+        incidentSummary: { type: 'string' },
+        timeline: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              time: { type: 'string' },
+              event: { type: 'string' },
+              involvedSuspectIds: { type: 'array', items: { type: 'string' } }
+            },
+            required: ['time', 'event', 'involvedSuspectIds'],
+            additionalProperties: false
+          }
+        },
+        requiredFacts: { type: 'array', minItems: 2, items: { type: 'string' } },
+        keyEvidenceIds: { type: 'array', minItems: 2, items: { type: 'string' } },
+        redHerringExplanations: { type: 'array', minItems: 1, items: { type: 'string' } },
+        solutionExplanation: { type: 'string' }
+      },
+      required: ['culpritId', 'motive', 'method', 'incidentSummary', 'timeline', 'requiredFacts', 'keyEvidenceIds', 'redHerringExplanations', 'solutionExplanation'],
+      additionalProperties: false
+    },
+    evidence: {
+      type: 'array',
+      minItems: 6,
+      maxItems: 10,
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          type: { type: 'string', enum: ['messages', 'image', 'cctv', 'witness', 'timeline'] },
+          description: { type: 'string' },
+          timestamp: { type: 'string' },
+          associatedSuspectIds: { type: 'array', items: { type: 'string' } },
+          content: { type: 'object', additionalProperties: true },
+          internalExplanation: { type: 'string' },
+          classification: { type: 'string', enum: ['clue', 'red-herring', 'corroboration', 'context'] }
+        },
+        required: ['id', 'title', 'type', 'description', 'timestamp', 'associatedSuspectIds', 'content', 'internalExplanation', 'classification'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['publicCase', 'solution', 'evidence'],
+  additionalProperties: false
+};
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const isTransientProviderFailure = (error: unknown) =>
   /\b(408|429|500|502|503|504)\b|UNAVAILABLE|RESOURCE_EXHAUSTED|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i
@@ -67,10 +155,21 @@ export async function generateCase(input: CreateCaseInput) {
         const response = await ai.models.generateContent({
           model,
           contents: prompt,
-          config: { responseMimeType: 'application/json' }
+          config: {
+            responseMimeType: 'application/json',
+            responseJsonSchema: generatedCaseResponseSchema,
+            maxOutputTokens: 32768
+          }
         });
         const raw = response.text || '';
-        const parsed = JSON.parse(raw.replace(/^```json\s*/, '').replace(/```$/, ''));
+        const finishReason = response.candidates?.[0]?.finishReason;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw.replace(/^```json\s*/, '').replace(/```$/, ''));
+        } catch (error) {
+          const parseMessage = error instanceof Error ? error.message : 'invalid JSON';
+          throw new Error(`Gemini returned invalid JSON (${raw.length} characters, finish reason: ${finishReason || 'unknown'}): ${parseMessage}`);
+        }
         return validateCase(GeneratedCaseSchema.parse(parsed), input);
       } catch (error) {
         last = error instanceof Error ? error.message : 'invalid output';
